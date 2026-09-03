@@ -7,7 +7,7 @@ opencv-python-headless
 numpy
 matplotlib
 tqdm
-pyslam @ git+https://github.com/uoip/pyslam.git
+
 streamlit
 pyngrok
 gdown
