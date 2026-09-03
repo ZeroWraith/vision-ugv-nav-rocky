@@ -1,0 +1,10 @@
+torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+onnxruntime-gpu
+opencv-python-headless
+numpy
+matplotlib
+tqdm
+pyslam @ git+https://github.com/uoip/pyslam.git
+streamlit
+pyngrok
+gdown
