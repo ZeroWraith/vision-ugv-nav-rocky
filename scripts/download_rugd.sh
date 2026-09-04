@@ -1,23 +1,42 @@
 #!/usr/bin/env bash
-# Download a single RUGD "rocky" sequence (scene_03) – ~200 MB
+# Download RUGD dataset and extract the rocky (scene_03) sequence.
+# Full dataset is ~5.3 GB. Only the rocky folder is kept.
 set -euo pipefail
 
 DEST_DIR="$(dirname "$0")/../data/rugd/scene_03"
 mkdir -p "$DEST_DIR"
 
-# RUGD is hosted on Google Drive; file IDs taken from the official download page.
-# Scene 03 (rocky) zip ~ 210 MB
-FILE_ID="1Kx6cK9e8JzVY2Q9v5Z5Y5Z5Y5Z5Y5Z5"   # placeholder – replace with real ID
-ZIP_PATH="$DEST_DIR/scene_03.zip"
+RGB_DIR="$DEST_DIR/rgb"
+if [ -d "$RGB_DIR" ] && [ "$(ls -A "$RGB_DIR" 2>/dev/null)" ]; then
+    echo "Rocky frames already present at $RGB_DIR — skipping download."
+    exit 0
+fi
 
-echo "Downloading RUGD rocky sequence..."
-gdown --id "$FILE_ID" -O "$ZIP_PATH"
+ZIP_URL="http://rugd.vision/data/RUGD_frames-with-annotations.zip"
+ZIP_PATH="/tmp/rugd_frames.zip"
 
-echo "Extracting..."
-unzip -q "$ZIP_PATH" -d "$DEST_DIR"
-rm "$ZIP_PATH"
+echo "Downloading RUGD dataset (~5.3 GB)..."
+wget -q --show-progress -O "$ZIP_PATH" "$ZIP_URL"
 
-# Create a tiny meta.json with camera intrinsics (taken from RUGD calibration)
+echo "Extracting rocky sequence..."
+# The zip contains RUGD_frames-with-annotations/rocky/*.png
+unzip -q -j "$ZIP_PATH" "RUGD_frames-with-annotations/rocky/*" -d "$RGB_DIR"
+
+# Rename frames to sequential format if needed
+cd "$RGB_DIR"
+i=0
+for f in $(ls *.png 2>/dev/null | sort); do
+    newname=$(printf "frame_%04d.png" $i)
+    if [ "$f" != "$newname" ]; then
+        mv "$f" "$newname"
+    fi
+    i=$((i + 1))
+done
+cd - > /dev/null
+
+rm -f "$ZIP_PATH"
+
+# Create meta.json with RUGD camera intrinsics
 cat > "$DEST_DIR/meta.json" <<'EOF'
 {
   "width": 640,
@@ -32,4 +51,4 @@ cat > "$DEST_DIR/meta.json" <<'EOF'
 }
 EOF
 
-echo "Done. Data ready at $DEST_DIR"
+echo "Done. Rocky frames ready at $RGB_DIR ($(ls "$RGB_DIR"/*.png 2>/dev/null | wc -l) frames)"
