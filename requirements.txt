@@ -3,6 +3,7 @@ torchvision
 torchaudio
 opencv-python-headless
 numpy
+scipy
 matplotlib
 tqdm
 streamlit
