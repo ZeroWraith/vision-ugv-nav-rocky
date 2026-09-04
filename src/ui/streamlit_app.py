@@ -262,7 +262,7 @@ synchronized_views()
 # ---------- Video player ----------
 if VIDEO_PATH.exists():
     st.subheader("Demo Video")
-    st.video(str(VIDEO_PATH))
+    st.video(str(VIDEO_PATH), format="video/mp4")
 
 # ---------- Sidebar info ----------
 st.sidebar.markdown("---")
