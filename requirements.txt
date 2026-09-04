@@ -2,7 +2,7 @@
 torch
 torchvision
 torchaudio
-onnxruntime-gpu
+onnxruntime-gpu==1.19.2
 opencv-python-headless
 numpy
 matplotlib
