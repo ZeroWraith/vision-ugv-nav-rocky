@@ -1,45 +1,44 @@
-import onnxruntime as ort
 import cv2
 import numpy as np
+import torch
+import torchvision
 
 
-class FastSCNN:
-    """ONNX-Runtime wrapper for Fast-SCNN (3-class). Requires CUDA GPU."""
+# ImageNet normalization
+_IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+_IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
 
-    def __init__(self, onnx_path: str, input_size=(640, 360)):
-        available = ort.get_available_providers()
-        if "CUDAExecutionProvider" not in available:
-            raise RuntimeError(
-                f"CUDAExecutionProvider not available. "
-                f"Available providers: {available}. "
-                f"Install onnxruntime-gpu and ensure CUDA is configured."
-            )
+# VOC class -> navigation class mapping
+_TRAVERSABLE = {0, 7, 10, 11, 12, 13, 14}  # bg, road, grass, sidewalk, terrain, fence, dirt
+_SKY = {17}
 
-        options = ort.SessionOptions()
-        options.log_severity_level = 0  # verbose — shows which ops fall back
 
-        self.session = ort.InferenceSession(
-            onnx_path,
-            sess_options=options,
-            providers=["CUDAExecutionProvider"],
-        )
+class DeepLabV3Seg:
+    """PyTorch DeepLabV3-ResNet50 segmentation on CUDA GPU."""
 
-        actual = self.session.get_providers()
-        if "CUDAExecutionProvider" not in actual:
-            raise RuntimeError(
-                f"ONNX session failed to use CUDA. "
-                f"Requested: ['CUDAExecutionProvider'], Actual: {actual}. "
-                f"Check CUDA runtime libraries (cuDNN, cuBLAS)."
-            )
-
-        self.input_size = input_size
-        self.input_name = self.session.get_inputs()[0].name
-        print(f"FastSCNN ONNX — device: GPU (CUDA)")
+    def __init__(self, input_size=(640, 360)):
+        self.model = torchvision.models.segmentation.deeplabv3_resnet50(
+            weights="DeepLabV3_ResNet50_Weights.DEFAULT"
+        ).cuda().eval()
+        self.input_size = input_size  # (W, H)
+        self.mean = _IMAGENET_MEAN.cuda()
+        self.std = _IMAGENET_STD.cuda()
 
     def infer(self, bgr_frame: np.ndarray) -> np.ndarray:
-        """Returns a (H,W) uint8 mask with values {0,1,2}."""
-        img = cv2.resize(bgr_frame, self.input_size).astype(np.float32) / 255.0
-        img = np.transpose(img, (2, 0, 1))[None]  # NCHW
-        out = self.session.run(None, {self.input_name: img})[0]
-        mask = out.argmax(1)[0].astype(np.uint8)
-        return mask
+        """Returns a (H,W) uint8 mask: 0=traversable, 1=obstacle, 2=sky."""
+        rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+        resized = cv2.resize(rgb, self.input_size)
+        tensor = torch.from_numpy(resized).permute(2, 0, 1).unsqueeze(0).float().cuda() / 255.0
+        tensor = (tensor - self.mean) / self.std
+
+        with torch.no_grad():
+            out = self.model(tensor)["out"]
+
+        raw = out.argmax(dim=1)[0].cpu().numpy().astype(np.uint8)
+
+        nav = np.ones_like(raw, dtype=np.uint8)  # default: obstacle
+        for c in _TRAVERSABLE:
+            nav[raw == c] = 0
+        for c in _SKY:
+            nav[raw == c] = 2
+        return nav

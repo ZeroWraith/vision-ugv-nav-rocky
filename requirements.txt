@@ -1,13 +1,10 @@
---index-url https://download.pytorch.org/whl/cu118
 torch
 torchvision
 torchaudio
-onnxruntime-gpu==1.19.2
 opencv-python-headless
 numpy
 matplotlib
 tqdm
-
 streamlit
 pyngrok
 gdown
