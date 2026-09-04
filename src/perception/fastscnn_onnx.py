@@ -11,10 +11,8 @@ class FastSCNN:
         available = ort.get_available_providers()
         if "CUDAExecutionProvider" in available:
             providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-            self._device = "GPU (CUDA)"
         else:
             providers = ["CPUExecutionProvider"]
-            self._device = "CPU"
             warnings.warn(
                 "CUDAExecutionProvider not available — falling back to CPU. "
                 f"Available providers: {available}"
@@ -23,8 +21,21 @@ class FastSCNN:
         self.session = ort.InferenceSession(onnx_path, providers=providers)
         self.input_size = input_size
         self.input_name = self.session.get_inputs()[0].name
-        print(f"FastSCNN ONNX session created — device: {self._device}, "
-              f"providers: {self.session.get_providers()}")
+
+        # Check what the session ACTUALLY uses (may silently fall back)
+        actual = self.session.get_providers()
+        if "CUDAExecutionProvider" in actual:
+            self._device = "GPU (CUDA)"
+        else:
+            self._device = "CPU"
+            if "CUDAExecutionProvider" in available:
+                warnings.warn(
+                    f"CUDA was available but session fell back to CPU. "
+                    f"Requested: {providers}, Actual: {actual}. "
+                    "Check CUDA runtime or try onnxruntime-gpu reinstall."
+                )
+
+        print(f"FastSCNN ONNX — device: {self._device}, providers: {actual}")
 
     def infer(self, bgr_frame: np.ndarray) -> np.ndarray:
         """Returns a (H,W) uint8 mask with values {0,1,2}."""
