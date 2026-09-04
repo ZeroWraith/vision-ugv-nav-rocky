@@ -20,7 +20,7 @@ wget -q --show-progress -O "$ZIP_PATH" "$ZIP_URL"
 
 echo "Extracting rocky sequence..."
 # The zip contains RUGD_frames-with-annotations/rocky/*.png
-unzip -q -j "$ZIP_PATH" "RUGD_frames-with-annotations/rocky/*" -d "$RGB_DIR"
+unzip -q -j "$ZIP_PATH" "RUGD_frames-with-annotations/creek/*" -d "$RGB_DIR"
 
 # Rename frames to sequential format if needed
 cd "$RGB_DIR"
