@@ -6,8 +6,13 @@ from pathlib import Path
 
 # ---------- Paths (absolute, no CWD dependency) ----------
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-DATA_DIR = _PROJECT_ROOT / "data" / "rugd" / "scene_03"
-VIDEO_PATH = _PROJECT_ROOT / "demo.mp4"
+_RUGD_BASE = _PROJECT_ROOT / "data" / "rugd"
+
+SCENES = {
+    "Creek (Rock Bed)": "scene_03",
+    "Village (Roads)": "village",
+    "Trail (Forest)": "trail_7",
+}
 
 st.set_page_config(page_title="UGV Vision Nav Demo", layout="wide")
 
@@ -32,7 +37,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("Vision-Based Autonomous UGV Navigation")
-st.caption("RUGD Dataset | DeepLabV3 | PyTorch CUDA | Real-time costmap + A* planning")
+st.caption("Multi-Terrain Demo | DeepLabV3 | PyTorch CUDA | Real-time costmap + A* planning")
+
+# ---------- Scene selector ----------
+scene_label = st.sidebar.selectbox("Terrain Scenario", list(SCENES.keys()))
+scene_dir = SCENES[scene_label]
+DATA_DIR = _RUGD_BASE / scene_dir
+VIDEO_PATH = DATA_DIR / "demo.mp4"
 
 # ---------- Determine frame count ----------
 if (DATA_DIR / "masks.npy").exists():
@@ -92,62 +103,22 @@ with col_next:
 
 # ---------- Load artifacts ----------
 @st.cache_data
-def load_artifacts():
-    masks = np.load(DATA_DIR / "masks.npy")
-    poses = np.loadtxt(DATA_DIR / "poses.txt")
-    costmap = np.load(DATA_DIR / "costmap.npy")
-    origin = np.load(DATA_DIR / "origin.npy")
-    waypoints = (np.load(DATA_DIR / "waypoints.npy")
-                 if (DATA_DIR / "waypoints.npy").exists() else None)
-    cmd_vel = (np.load(DATA_DIR / "cmd_vel.npy")
-               if (DATA_DIR / "cmd_vel.npy").exists() else None)
+def load_artifacts(_scene_dir):
+    d = _RUGD_BASE / _scene_dir
+    masks = np.load(d / "masks.npy")
+    poses = np.loadtxt(d / "poses.txt")
+    costmap = np.load(d / "costmap.npy")
+    origin = np.load(d / "origin.npy")
+    waypoints = np.load(d / "waypoints.npy") if (d / "waypoints.npy").exists() else None
+    cmd_vel = np.load(d / "cmd_vel.npy") if (d / "cmd_vel.npy").exists() else None
     return masks, poses, costmap, origin, waypoints, cmd_vel
 
 
-masks, poses, costmap, origin, waypoints, cmd_vel = load_artifacts()
+masks, poses, costmap, origin, waypoints, cmd_vel = load_artifacts(scene_dir)
 valid = ~np.isnan(poses).any(axis=1)
 
 
-def render_costmap_frame(idx):
-    """Render the costmap with trajectory and A* path."""
-    cm_vis = _costmap_colormap_vis(costmap)
-
-    # Trajectory
-    traj = poses[valid][:idx + 1]
-    for j, p in enumerate(traj):
-        gx = int((p[0] - origin[0]) / 0.05)
-        gy = int((p[1] - origin[1]) / 0.05)
-        if 0 <= gx < cm_vis.shape[1] and 0 <= gy < cm_vis.shape[0]:
-            alpha = 0.3 + 0.7 * j / max(len(traj), 1)
-            col = tuple(int(c * alpha) for c in (255, 200, 0))
-            cv2.circle(cm_vis, (gx, gy), 2, col, -1)
-
-    # Current pose
-    if valid[idx]:
-        p = poses[idx]
-        gx = int((p[0] - origin[0]) / 0.05)
-        gy = int((p[1] - origin[1]) / 0.05)
-        if 0 <= gx < cm_vis.shape[1] and 0 <= gy < cm_vis.shape[0]:
-            cv2.circle(cm_vis, (gx, gy), 5, (0, 255, 0), -1)
-            cv2.circle(cm_vis, (gx, gy), 5, (255, 255, 255), 1)
-
-    # A* path
-    if waypoints is not None and len(waypoints) > 1:
-        pts = []
-        for wp in waypoints:
-            gx = int((wp[0] - origin[0]) / 0.05)
-            gy = int((wp[1] - origin[1]) / 0.05)
-            if 0 <= gx < cm_vis.shape[1] and 0 <= gy < cm_vis.shape[0]:
-                pts.append([gx, gy])
-        if len(pts) > 1:
-            pts_arr = np.array(pts, dtype=np.int32).reshape(-1, 1, 2)
-            cv2.polylines(cm_vis, [pts_arr], False, (0, 255, 255), 2, cv2.LINE_AA)
-
-    st.image(cv2.cvtColor(cm_vis, cv2.COLOR_BGR2RGB), use_container_width=True)
-
-
 def _costmap_colormap_vis(costmap):
-    """Gradient costmap visualization."""
     norm = np.clip(costmap.astype(np.float32) / 254.0, 0, 1)
     h, w = norm.shape
     rgb = np.zeros((h, w, 3), dtype=np.uint8)
@@ -170,6 +141,40 @@ def _costmap_colormap_vis(costmap):
     return rgb
 
 
+def render_costmap_frame(idx):
+    cm_vis = _costmap_colormap_vis(costmap)
+
+    traj = poses[valid][:idx + 1]
+    for j, p in enumerate(traj):
+        gx = int((p[0] - origin[0]) / 0.05)
+        gy = int((p[1] - origin[1]) / 0.05)
+        if 0 <= gx < cm_vis.shape[1] and 0 <= gy < cm_vis.shape[0]:
+            alpha = 0.3 + 0.7 * j / max(len(traj), 1)
+            col = tuple(int(c * alpha) for c in (255, 200, 0))
+            cv2.circle(cm_vis, (gx, gy), 2, col, -1)
+
+    if valid[idx]:
+        p = poses[idx]
+        gx = int((p[0] - origin[0]) / 0.05)
+        gy = int((p[1] - origin[1]) / 0.05)
+        if 0 <= gx < cm_vis.shape[1] and 0 <= gy < cm_vis.shape[0]:
+            cv2.circle(cm_vis, (gx, gy), 5, (0, 255, 0), -1)
+            cv2.circle(cm_vis, (gx, gy), 5, (255, 255, 255), 1)
+
+    if waypoints is not None and len(waypoints) > 1:
+        pts = []
+        for wp in waypoints:
+            gx = int((wp[0] - origin[0]) / 0.05)
+            gy = int((wp[1] - origin[1]) / 0.05)
+            if 0 <= gx < cm_vis.shape[1] and 0 <= gy < cm_vis.shape[0]:
+                pts.append([gx, gy])
+        if len(pts) > 1:
+            pts_arr = np.array(pts, dtype=np.int32).reshape(-1, 1, 2)
+            cv2.polylines(cm_vis, [pts_arr], False, (0, 255, 255), 2, cv2.LINE_AA)
+
+    st.image(cv2.cvtColor(cm_vis, cv2.COLOR_BGR2RGB), use_container_width=True)
+
+
 # ---------- Animated fragment ----------
 run_every = 1.0 / st.session_state.speed if st.session_state.playing else None
 
@@ -178,12 +183,10 @@ run_every = 1.0 / st.session_state.speed if st.session_state.playing else None
 def synchronized_views():
     idx = st.session_state.frame_idx
 
-    # Auto-advance
     if st.session_state.playing:
         idx = (idx + 1) % TOTAL_FRAMES
         st.session_state.frame_idx = idx
 
-    # ---- Three-column layout ----
     col_cm, col_vid, col_seg = st.columns([1, 2, 1])
 
     with col_cm:
@@ -203,7 +206,6 @@ def synchronized_views():
         st.image(cv2.cvtColor(mask_vis, cv2.COLOR_BGR2RGB),
                  use_container_width=True)
 
-    # ---- Metrics row ----
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Frame", f"{idx + 1} / {TOTAL_FRAMES}")
     if valid[idx]:
@@ -213,16 +215,14 @@ def synchronized_views():
     if cmd_vel is not None and idx < len(cmd_vel):
         m3.metric("Velocity", f"{cmd_vel[idx][0]:.2f} m/s")
     else:
-        m3.metric("Velocity", "—")
+        m3.metric("Velocity", "--")
     obs_pct = np.mean(masks[idx] == 1) * 100
     m4.metric("Obstacles", f"{obs_pct:.0f}%")
 
 
 def _build_vis_frame(idx):
-    """Build the annotated frame using draw_frame."""
     from src.mapping.viz import draw_frame
 
-    # Load RGB frames from disk (cached)
     if not hasattr(st, "_frame_cache") or st._frame_cache is None:
         st._frame_cache = {}
     if idx not in st._frame_cache:
@@ -233,13 +233,11 @@ def _build_vis_frame(idx):
         else:
             st._frame_cache[idx] = np.zeros((480, 640, 3), dtype=np.uint8)
 
-    frame = st._frame_cache[idx]
-    frame_resized = cv2.resize(frame, (640, 360))
+    frame = cv2.resize(st._frame_cache[idx], (640, 360))
 
     past = poses[valid][:idx + 1] if idx > 0 else None
     cmd = cmd_vel[idx] if cmd_vel is not None and idx < len(cmd_vel) else None
 
-    # Estimate heading from trajectory
     heading = 0.0
     if past is not None and len(past) >= 2:
         dx = past[-1][0] - past[-2][0]
@@ -247,7 +245,7 @@ def _build_vis_frame(idx):
         heading = np.arctan2(dx, dy)
 
     return draw_frame(
-        frame_resized, masks[idx],
+        frame, masks[idx],
         poses[idx] if valid[idx] else None,
         waypoints, costmap, origin,
         cmd=cmd, resolution=0.05,
@@ -261,12 +259,14 @@ synchronized_views()
 
 # ---------- Video player ----------
 if VIDEO_PATH.exists():
-    st.subheader("Demo Video")
+    st.subheader(f"Demo Video: {scene_label}")
     st.video(str(VIDEO_PATH), format="video/mp4")
 
 # ---------- Sidebar info ----------
 st.sidebar.markdown("---")
 st.sidebar.info(
-    f"GPU: NVIDIA T4 | Frames: {TOTAL_FRAMES} | "
-    f"Resolution: 640x360 | Costmap: {costmap.shape[0]}x{costmap.shape[1]}"
+    f"Terrain: {scene_label}\n\n"
+    f"Frames: {TOTAL_FRAMES} | "
+    f"Resolution: 640x360\n\n"
+    f"Costmap: {costmap.shape[0]}x{costmap.shape[1]}"
 )
