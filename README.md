@@ -14,7 +14,7 @@ Runs entirely in **Google Colab (free T4 GPU)** or locally on any machine with P
 - [Pipeline Architecture](#pipeline-architecture)
   - [Stage 1: Dataset Acquisition](#stage-1-dataset-acquisition)
   - [Stage 2: Perception (Semantic Segmentation)](#stage-2-perception-semantic-segmentation)
-  - [Stage 3: Localization (Trajectory Simulation)](#stage-3-localization-trajectory-simulation)
+  - [Stage 3: Localization (Visual Odometry)](#stage-3-localization-visual-odometry)
   - [Stage 4: Mapping (Costmap Construction)](#stage-4-mapping-costmap-construction)
   - [Stage 5: Global Planning (A\*)](#stage-5-global-planning-a)
   - [Stage 6: Local Control (Pure Pursuit)](#stage-6-local-control-pure-pursuit)
@@ -71,10 +71,13 @@ The notebook executes 7 sequential stages. Each stage reads from and writes to p
 │                                                  │                               │
 │                                           masks.npy (N,H,W)                      │
 │                                                  │                               │
-│  ┌──────────────┐    ┌──────────────┐           │                               │
-│  │  Trajectory  │───▶│  poses.txt   │───────────┤                               │
-│  │  Simulator   │    │  (N,3)       │           │                               │
-│  └──────────────┘    └──────────────┘           │                               │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                   │
+│  │  ORB Feature │───▶│  Essential   │───▶│  Pose        │                   │
+│  │  Detection   │    │  Matrix +    │    │  Integration │                   │
+│  │              │    │  recoverPose │    │  (x,y,yaw)   │                   │
+│  └──────────────┘    └──────────────┘    └──────┬───────┘                   │
+│                                                  │                          │
+│                                           poses.txt (N,3)                  │
 │                                                  ▼                               │
 │                                          ┌──────────────┐                        │
 │                                          │  Costmap     │                        │
@@ -177,31 +180,39 @@ The notebook executes 7 sequential stages. Each stage reads from and writes to p
 
 ---
 
-### Stage 3: Localization (Trajectory Simulation)
+### Stage 3: Localization (Visual Odometry)
 
-**What:** Generates a realistic curved trajectory for the robot, simulating a UGV navigating through each terrain.
+**What:** Estimates the robot's pose (position + yaw) for each frame using frame-to-frame visual odometry with ORB features and the Essential Matrix.
 
-**Why:** To build a consistent map, the system needs to know where the robot was when each frame was captured. Without GPS or a real SLAM system, a realistic simulated trajectory demonstrates the full pipeline.
+**Why:** To build a consistent map, the system needs to know where the robot was when each frame was captured. Visual odometry uses the camera's own motion between frames to estimate trajectory — no GPS required.
 
 **How it works:**
 
-1. **Trajectory generation (`simulate_trajectory()`):** Produces a path that weaves left/right with sinusoidal turns and varying speed:
-   - **Yaw:** `start_angle + amplitude × sin(turn_freq × t × 2π)` — smooth sinusoidal heading.
-   - **Speed:** `speed × clip(1.0 - turn_rate × 0.3, 0.4, 1.0)` — slows during turns.
-   - **Position:** Integrated from velocity: `dx = v × sin(yaw)`, `dy = v × cos(yaw)`.
-   - Returns `(N, 3)` array: `[x, y, yaw]` in world frame.
+1. **Feature detection (`cv2.ORB_create(nfeatures=3000)`):** Detects ORB keypoints in consecutive grayscale frames.
 
-2. **Per-scene parameters (`SCENE_TRAJECTORIES`):** Each terrain has tuned trajectory parameters:
+2. **Feature matching (`cv2.BFMatcher`):** Matches ORB descriptors between frames using Hamming distance, filtered by Lowe's ratio test (0.7).
 
-   | Scene | Speed | Turn Freq | Amplitude | Start Angle |
-   |-------|-------|-----------|-----------|-------------|
-   | Creek | 0.5 | 0.015 | 10.0 | 0.0 |
-   | Village | 0.6 | 0.025 | 6.0 | 0.3 |
-   | Trail | 0.4 | 0.03 | 12.0 | -0.2 |
+3. **Essential Matrix estimation (`cv2.findEssentialMat`):** Computes the Essential Matrix from matched point correspondences using RANSAC (threshold=1.0, confidence=0.999).
 
-3. Poses are saved as `(N, 3)` text file (x, y, yaw).
+4. **Pose recovery (`cv2.recoverPose`):** Decomposes the Essential Matrix into rotation `R` and unit translation `t`, returning the number of inlier correspondences.
 
-**Code:** `src/sim/trajectory.py`, Notebook Cell 3
+5. **Pose integration:**
+   - **Yaw delta:** Extracted from rotation matrix: `arctan2(R[1,0], R[0,0])`
+   - **Translation:** Scaled by a fixed constant (`SCALE` metres per frame-step) to handle monocular scale ambiguity.
+   - **World-frame displacement:** Rotated by current yaw: `wx = cos(yaw)*dx - sin(yaw)*dy`, `wy = sin(yaw)*dx + cos(yaw)*dy`
+   - **Accumulated:** `new_pose = prev_pose + [wx, wy, yaw_delta]`
+
+6. **Per-scene scale factors:**
+
+   | Scene | Scale (m/frame) | Rationale |
+   |-------|----------------|-----------|
+   | Creek | 0.5 | Moderate forward speed on rocky terrain |
+   | Village | 0.6 | Faster on paved roads |
+   | Trail | 0.4 | Slower on rough forest path |
+
+7. **Fallback:** If VO produces < 2m total movement (e.g., featureless scene), falls back to simulated curved trajectory from `src/sim/trajectory.py`.
+
+**Code:** `src/slam/visual_odometry.py` (`SimpleVisualOdometry` class), Notebook Cell 3
 
 ---
 
@@ -410,7 +421,8 @@ vision-ugv-nav-rocky/
 │   │   └── pure_pursuit.py         # Pure pursuit controller
 │   ├── slam/
 │   │   ├── __init__.py
-│   │   └── orb_slam3_wrapper.py    # ORB-SLAM3 wrapper (optional)
+│   │   ├── visual_odometry.py       # ORB + Essential Matrix VO
+│   │   └── orb_slam3_wrapper.py     # ORB-SLAM3 wrapper (optional)
 │   ├── ui/
 │   │   ├── __init__.py
 │   │   └── streamlit_app.py        # Interactive web dashboard
@@ -458,9 +470,28 @@ Visualization utilities for segmentation masks.
 | `overlay_mask(frame, mask, alpha=0.35) → np.ndarray` | Function | Alpha-blends colorized mask onto frame |
 | `overlay_mask_with_edges(frame, mask, alpha=0.35) → np.ndarray` | Function | Alpha-blends mask + draws obstacle edge contours |
 
+### `src/slam/visual_odometry.py`
+
+Frame-to-frame monocular visual odometry using OpenCV Essential Matrix.
+
+| Symbol | Type | Description |
+|--------|------|-------------|
+| `SimpleVisualOdometry` | Class | ORB + Essential Matrix VO wrapper |
+| `SimpleVisualOdometry.__init__(K, scale=0.5)` | Method | Initializes with camera intrinsics and fixed scale |
+| `SimpleVisualOdometry.process_frame(frame_bgr) → np.ndarray` | Method | Processes BGR frame, returns `(x, y, yaw)` pose |
+| `SimpleVisualOdometry.get_poses() → np.ndarray` | Method | Returns all accumulated poses as `(N, 3)` array |
+
+**Algorithm:**
+1. ORB feature detection (3000 features)
+2. BFMatcher with Hamming distance + Lowe's ratio test (0.7)
+3. `cv2.findEssentialMat` (RANSAC, threshold=1.0)
+4. `cv2.recoverPose` → R, t
+5. Yaw from `arctan2(R[1,0], R[0,0])`
+6. Scaled translation integrated in world frame
+
 ### `src/sim/trajectory.py`
 
-Generates realistic curved trajectories for demo purposes.
+Simulated curved trajectory (used as fallback when VO fails).
 
 | Symbol | Type | Description |
 |--------|------|-------------|
