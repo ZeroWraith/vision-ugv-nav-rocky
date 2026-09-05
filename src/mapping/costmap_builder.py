@@ -50,7 +50,8 @@ def build_costmap(masks, poses, K, cam_height=1.2, pitch=0.0,
     # Pre-compute per-row depth
     depth_map = _pixel_depths(np.arange(H), W, H, K, cam_height)
 
-    for i in tqdm(range(len(masks)), desc="Building costmap"):
+    n = min(len(masks), len(poses))
+    for i in tqdm(range(n), desc="Building costmap"):
         pose = poses[i]
         if np.isnan(pose).any():
             continue
