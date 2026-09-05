@@ -1,24 +1,38 @@
-# RUGD Dataset (Creek Sequence)
+# RUGD Dataset
 
 This folder is **git-ignored** (large files).
-Run `scripts/download_rugd.sh` or execute the notebook to fetch the *creek* subsequence (~2000+ frames of rocky terrain).
+Run the notebook to fetch and process the RUGD data (~5.3 GB download).
+
+## Scenes Used
+
+The pipeline processes three terrain sequences from the RUGD dataset:
+
+| Scene | Directory | Frames | Terrain Type |
+|-------|-----------|--------|-------------|
+| **Creek** | `scene_03/` | ~836 | Rock bed, water, boulders |
+| **Village** | `village/` | ~117 | Buildings, paved roads, fences |
+| **Trail** | `trail_7/` | ~290 | Forest path, gravel, trees |
 
 ## About
 
-The **creek** sequence from the RUGD dataset contains areas near a body of water with significant rock-bed terrain — ideal for testing off-road navigation in unstructured environments.
+The **RUGD** (Robot Unstructured Ground Driving) dataset contains 24 semantic classes across 18 video sequences recorded on a Clearpath Husky robot in unstructured outdoor environments. This project uses three visually distinct sequences to demonstrate multi-terrain autonomous navigation.
 
 ## Directory Structure (after download)
 
 ```
-data/rugd/scene_03/
-├── rgb/              # Extracted creek frames (frame_0000.png, ...)
-├── meta.json         # Camera intrinsics (fx, fy, cx, cy, height, pitch)
-├── masks.npy         # Segmentation masks (N, H, W) uint8
-├── poses.txt         # Robot poses (N, 3) float
-├── costmap.npy       # Occupancy grid (G, G) uint8
-├── origin.npy        # Grid origin (2,) float
-├── waypoints.npy     # A* path (M, 2) float
-└── cmd_vel.npy       # Velocity commands (N, 2) float
+data/rugd/
+├── scene_03/                  # Creek sequence
+│   ├── rgb/                   # Extracted frames (frame_0000.png, ...)
+│   ├── meta.json              # Camera intrinsics (fx, fy, cx, cy, height, pitch)
+│   ├── masks.npy              # Segmentation masks (N, H, W) uint8
+│   ├── poses.txt              # Robot poses (N, 3) float [x, y, yaw]
+│   ├── costmap.npy            # Gradient occupancy grid (G, G) uint8
+│   ├── origin.npy             # Grid origin (2,) float
+│   ├── waypoints.npy          # A* path (M, 2) float
+│   ├── cmd_vel.npy            # Velocity commands (N, 2) float
+│   └── demo.mp4               # Per-scene demo video (H.264)
+├── village/                   # Village sequence (same structure)
+└── trail_7/                   # Trail sequence (same structure)
 ```
 
 ## Attribution

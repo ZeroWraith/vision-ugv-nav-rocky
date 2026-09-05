@@ -1,6 +1,6 @@
-# Vision-Based Autonomous Navigation for UGV (Outdoor, GPS-Denied)
+# Vision-Based Autonomous Navigation for UGV
 
-An end-to-end vision-based autonomous navigation pipeline for an Unmanned Ground Vehicle (UGV) operating in unstructured outdoor environments without GPS. The system processes real camera frames from the **RUGD creek sequence** (rocky terrain) through five pipeline stages: **Perception → Localization → Mapping → Planning → Control**, producing a navigable path and velocity commands.
+An end-to-end vision-based autonomous navigation pipeline for an Unmanned Ground Vehicle (UGV) operating in unstructured outdoor environments without GPS. The system processes real camera frames from the **RUGD dataset** across three distinct terrain scenarios — **Creek** (rock bed), **Village** (buildings, roads), and **Trail** (forest path) — through five pipeline stages: **Perception → Localization → Mapping → Planning → Control**, producing navigable paths, velocity commands, and polished demo videos.
 
 Runs entirely in **Google Colab (free T4 GPU)** or locally on any machine with Python 3.10+.
 
@@ -14,12 +14,13 @@ Runs entirely in **Google Colab (free T4 GPU)** or locally on any machine with P
 - [Pipeline Architecture](#pipeline-architecture)
   - [Stage 1: Dataset Acquisition](#stage-1-dataset-acquisition)
   - [Stage 2: Perception (Semantic Segmentation)](#stage-2-perception-semantic-segmentation)
-  - [Stage 3: Visual Localization (SLAM)](#stage-3-visual-localization-slam)
+  - [Stage 3: Localization (Trajectory Simulation)](#stage-3-localization-trajectory-simulation)
   - [Stage 4: Mapping (Costmap Construction)](#stage-4-mapping-costmap-construction)
   - [Stage 5: Global Planning (A\*)](#stage-5-global-planning-a)
   - [Stage 6: Local Control (Pure Pursuit)](#stage-6-local-control-pure-pursuit)
   - [Stage 7: Visualization (Demo Video)](#stage-7-visualization-demo-video)
   - [Stage 8: Interactive UI (Streamlit)](#stage-8-interactive-ui-streamlit)
+- [Multi-Terrain Scenarios](#multi-terrain-scenarios)
 - [Repository Layout](#repository-layout)
 - [Source Code Reference](#source-code-reference)
 - [Data Artifacts](#data-artifacts)
@@ -27,7 +28,6 @@ Runs entirely in **Google Colab (free T4 GPU)** or locally on any machine with P
 - [GPU Support](#gpu-support)
 - [Configuration Parameters](#configuration-parameters)
 - [Dependencies](#dependencies)
-- [Docker](#docker)
 - [License and Citation](#license-and-citation)
 
 ---
@@ -38,9 +38,9 @@ Runs entirely in **Google Colab (free T4 GPU)** or locally on any machine with P
 
 1. Click the Colab badge above.
 2. **Runtime → Change runtime type → GPU (T4)**.
-3. **Run all cells** (~4 min including ~2 min download).
-4. A public **ngrok URL** appears at the end — open it for the interactive Streamlit UI.
-5. `demo.mp4` is also saved and downloadable.
+3. **Run all cells** (~10 min including ~2 min download + ~6 min segmentation across 3 terrains).
+4. Three individual demo videos + one montage video are produced.
+5. A public **ngrok URL** appears at the end — open it for the interactive Streamlit UI with scene selector.
 
 ### Local
 
@@ -53,92 +53,94 @@ jupyter notebook notebooks/01_full_pipeline.ipynb
 
 Run all cells. When prompted, optionally launch the Streamlit UI.
 
-### Docker
-
-```bash
-docker build -t ugv-nav .
-docker run --gpus all -p 8888:8888 ugv-nav
-# Open http://localhost:8888 and run the notebook
-```
-
 ---
 
 ## Pipeline Architecture
 
-The notebook executes 8 sequential stages. Each stage reads from and writes to the `data/rugd/scene_03/` directory.
+The notebook executes 7 sequential stages. Each stage reads from and writes to per-scene directories under `data/rugd/`.
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        FULL PIPELINE DATA FLOW                              │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                   │
-│  │  RUGD ZIP    │───▶│  RGB Frames  │───▶│  FastSCNN    │                   │
-│  │  (5.3 GB)    │    │  + meta.json │    │  ONNX GPU    │                   │
-│  └──────────────┘    └──────────────┘    └──────┬───────┘                   │
-│                                                  │                          │
-│                                           masks.npy (N,H,W)                 │
-│                                                  │                          │
-│  ┌──────────────┐    ┌──────────────┐           │                          │
-│  │  pyslam /    │───▶│  poses.txt   │───────────┤                          │
-│  │  simulated   │    │  (N,3)       │           │                          │
-│  └──────────────┘    └──────────────┘           │                          │
-│                                                  ▼                          │
-│                                          ┌──────────────┐                   │
-│                                          │  Costmap     │                   │
-│                                          │  Builder     │                   │
-│                                          └──────┬───────┘                   │
-│                                                  │                          │
-│                                    costmap.npy + origin.npy                 │
-│                                                  │                          │
-│                                                  ▼                          │
-│                                          ┌──────────────┐                   │
-│                                          │  A* Global   │                   │
-│                                          │  Planner     │                   │
-│                                          └──────┬───────┘                   │
-│                                                  │                          │
-│                                          waypoints.npy                      │
-│                                                  │                          │
-│                                                  ▼                          │
-│                                          ┌──────────────┐                   │
-│                                          │ Pure Pursuit │                   │
-│                                          │ Local Ctrl   │                   │
-│                                          └──────┬───────┘                   │
-│                                                  │                          │
-│                                          cmd_vel.npy                        │
-│                                                  │                          │
-│                                      ┌───────────┴───────────┐              │
-│                                      ▼                       ▼              │
-│                              ┌──────────────┐       ┌──────────────┐        │
-│                              │  demo.mp4    │       │  Streamlit   │        │
-│                              │  Video       │       │  UI          │        │
-│                              └──────────────┘       └──────────────┘        │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                         FULL PIPELINE DATA FLOW                                   │
+├──────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                        │
+│  │  RUGD ZIP    │───▶│  RGB Frames  │───▶│  DeepLabV3   │                        │
+│  │  (5.3 GB)    │    │  + meta.json │    │  PyTorch CUDA│                        │
+│  └──────────────┘    └──────────────┘    └──────┬───────┘                        │
+│                                                  │                               │
+│                                           masks.npy (N,H,W)                      │
+│                                                  │                               │
+│  ┌──────────────┐    ┌──────────────┐           │                               │
+│  │  Trajectory  │───▶│  poses.txt   │───────────┤                               │
+│  │  Simulator   │    │  (N,3)       │           │                               │
+│  └──────────────┘    └──────────────┘           │                               │
+│                                                  ▼                               │
+│                                          ┌──────────────┐                        │
+│                                          │  Costmap     │                        │
+│                                          │  Builder     │                        │
+│                                          │  (gradient)  │                        │
+│                                          └──────┬───────┘                        │
+│                                                  │                               │
+│                                    costmap.npy + origin.npy                      │
+│                                                  │                               │
+│                                                  ▼                               │
+│                                          ┌──────────────┐                        │
+│                                          │  A* Global   │                        │
+│                                          │  (cost-aware)│                        │
+│                                          └──────┬───────┘                        │
+│                                                  │                               │
+│                                          waypoints.npy                           │
+│                                                  │                               │
+│                                                  ▼                               │
+│                                          ┌──────────────┐                        │
+│                                          │ Pure Pursuit │                        │
+│                                          │ Local Ctrl   │                        │
+│                                          └──────┬───────┘                        │
+│                                                  │                               │
+│                                          cmd_vel.npy                             │
+│                                                  │                               │
+│                                      ┌───────────┴───────────┐                   │
+│                                      ▼                       ▼                   │
+│                              ┌──────────────┐       ┌──────────────┐             │
+│                              │  Per-scene   │       │  Streamlit   │             │
+│                              │  demo.mp4    │       │  UI          │             │
+│                              └──────┬───────┘       └──────────────┘             │
+│                                     │                                            │
+│                                     ▼                                            │
+│                             ┌──────────────┐                                     │
+│                             │  Montage     │                                     │
+│                             │  demo.mp4    │                                     │
+│                             └──────────────┘                                     │
+│                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ### Stage 1: Dataset Acquisition
 
-**What:** Downloads the RUGD (Robot Unstructured Ground Driving) dataset and extracts the creek sequence — the only sequence with significant rocky/rock-bed terrain.
+**What:** Downloads the RUGD (Robot Unstructured Ground Driving) dataset and extracts three terrain sequences for multi-scenario demo.
 
-**Why:** The pipeline needs real-world outdoor camera frames with known camera calibration to produce meaningful navigation results.
+**Why:** Different terrains demonstrate the pipeline's versatility — rock bed (Creek), man-made structures (Village), and dense forest (Trail).
 
 **How it works:**
 
-1. The notebook checks if `data/rugd/scene_03/rgb/` already contains PNG frames.
-2. If empty, downloads `http://rugd.vision/data/RUGD_frames-with-annotations.zip` (~5.3 GB) using `wget` (with `urllib` fallback).
-3. Extracts **only** the `creek/*.png` frames from the zip (not all 18 scenes) using Python's `zipfile` module.
+1. Checks if all three scene directories already contain frames.
+2. If any are missing, downloads `http://rugd.vision/data/RUGD_frames-with-annotations.zip` (~5.3 GB) using `wget` (with `urllib` fallback).
+3. Extracts frames for three scenes in a single pass through the zip:
+   - `creek/` → `data/rugd/scene_03/rgb/` (~836 frames)
+   - `village/` → `data/rugd/village/rgb/` (~117 frames)
+   - `trail-7/` → `data/rugd/trail_7/rgb/` (~290 frames)
 4. Renames frames to sequential format: `frame_0000.png`, `frame_0001.png`, etc.
-5. Creates `meta.json` with the RUGD camera calibration parameters.
+5. Writes `meta.json` with RUGD camera calibration (identical for all scenes).
 6. Cleans up the downloaded zip file.
 
 **Key files produced:**
-- `data/rugd/scene_03/rgb/frame_XXXX.png` — raw camera frames (1376×1110 native, used at 640×480)
-- `data/rugd/scene_03/meta.json` — camera intrinsics and configuration
+- `data/rugd/{scene_dir}/rgb/frame_XXXX.png` — raw camera frames (1376×1110 native, used at 640×480)
+- `data/rugd/{scene_dir}/meta.json` — camera intrinsics and configuration
 
-**Code:** Notebook Cell 2, `scripts/download_rugd.sh`
+**Code:** Notebook Cell 2
 
 ---
 
@@ -146,118 +148,122 @@ The notebook executes 8 sequential stages. Each stage reads from and writes to t
 
 **What:** Classifies every pixel in each camera frame into one of three semantic classes: **traversable ground** (0), **obstacle** (1), or **sky** (2).
 
-**Why:** The robot needs to distinguish walkable terrain from obstacles and sky to navigate safely. This is the core perception task for off-road navigation.
+**Why:** The robot needs to distinguish walkable terrain from obstacles and sky to navigate safely.
 
 **How it works:**
 
-1. **Model export (Cell 4):** If `models/fastscnn_rugd.onnx` doesn't exist, exports a torchvision DeepLabV3-ResNet50 model to ONNX format:
-   - Wraps the model in a `SegWrapper` that extracts the `'out'` key from the output dict.
-   - Exports with `torch.onnx.export()` using opset 17, dynamic batch axis, input shape `(1, 3, 360, 640)`.
-   - Uses GPU if available (`torch.cuda.is_available()`).
+1. **Model loading (Cell 3):** Loads `torchvision.models.segmentation.deeplabv3_resnet50` with pretrained COCO/VOC weights directly onto the CUDA GPU. The model is loaded once and shared across all three terrain scenarios.
 
-2. **Inference (Cell 5):** The `FastSCNN` class loads the ONNX model:
-   - Probes `ort.get_available_providers()` for CUDA support.
-   - If `CUDAExecutionProvider` is available, uses GPU; otherwise falls back to `CPUExecutionProvider` with a warning.
-   - For each frame:
-     - Resizes to 640×360 (model input size).
-     - Normalizes pixel values to `[0, 1]` float32.
-     - Transposes to NCHW format: `(1, 3, 360, 640)`.
-     - Runs ONNX Runtime inference.
-     - Applies `argmax` across the channel axis to get per-pixel class IDs.
-     - Returns a `(360, 640)` uint8 mask.
-   - All masks are stacked into `(N, 360, 640)` and saved to `masks.npy`.
+2. **Inference (Cell 3, `segment_frame()`):** For each frame:
+   - Resizes to 640×360 (model input size).
+   - Normalizes pixel values with ImageNet statistics: mean `[0.485, 0.456, 0.406]`, std `[0.229, 0.224, 0.225]`.
+   - Transposes to NCHW format: `(1, 3, 360, 640)`.
+   - Runs PyTorch inference with `torch.no_grad()`.
+   - Applies `argmax` across the 21 VOC class channels.
+   - Remaps 21 VOC classes to 3 navigation classes.
+   - Returns a `(360, 640)` uint8 mask.
 
-**Class mapping:**
-| Value | Class | Color (overlay) | Meaning |
-|-------|-------|-----------------|---------|
-| 0 | Traversable | Green `(0, 255, 0)` | Safe to drive (grass, dirt, rock) |
-| 1 | Obstacle | Red `(0, 0, 255)` | Cannot traverse (boulders, walls) |
-| 2 | Sky | Blue `(255, 0, 0)` | Overhead (not ground) |
+3. **Caching:** Masks are saved per-scene as `masks.npy` and reused on subsequent runs.
 
-**Code:** `src/perception/fastscnn_onnx.py` (FastSCNN class), `src/perception/utils.py` (visualization), Notebook Cells 4-5
+**Class mapping (VOC → Navigation):**
+
+| Nav Value | Nav Class | Color (overlay) | VOC Classes Included |
+|-----------|-----------|-----------------|---------------------|
+| 0 | Traversable | Green `(70, 130, 70)` | background(0), road(7), grass(10), sidewalk(11), terrain(12), fence(13), dirt(14) |
+| 1 | Obstacle | Red `(40, 40, 210)` | person(15), car(6), boulder, wall, etc. (all others) |
+| 2 | Sky | Blue `(170, 130, 50)` | sky(17) |
+
+**Code:** `src/perception/fastscnn_onnx.py` (`DeepLabV3Seg` class), `src/perception/utils.py` (visualization), Notebook Cell 3
 
 ---
 
-### Stage 3: Visual Localization (SLAM)
+### Stage 3: Localization (Trajectory Simulation)
 
-**What:** Estimates the robot's 3D pose (position + orientation) for each frame using visual odometry.
+**What:** Generates a realistic curved trajectory for the robot, simulating a UGV navigating through each terrain.
 
-**Why:** To build a consistent map, the system needs to know where the robot was when each frame was captured. Without GPS, this must be done视觉ly.
+**Why:** To build a consistent map, the system needs to know where the robot was when each frame was captured. Without GPS or a real SLAM system, a realistic simulated trajectory demonstrates the full pipeline.
 
 **How it works:**
 
-1. Attempts to import `pyslam.visual_odometry.VisualOdometry` (ORB-based visual odometry from the pyslam library).
-2. If pyslam is available, processes each grayscale frame through `slam.track(frame)` to get camera poses.
-3. If pyslam is not available (common — it requires specific C++ build deps), **falls back to simulated trajectory:**
-   - Assumes constant forward motion along the Z-axis: `z = i * 0.5` meters per frame.
-   - This produces a straight-line trajectory that still demonstrates the mapping and planning stages.
-4. Poses are saved as `(N, 3)` text file (x, y, z translations).
+1. **Trajectory generation (`simulate_trajectory()`):** Produces a path that weaves left/right with sinusoidal turns and varying speed:
+   - **Yaw:** `start_angle + amplitude × sin(turn_freq × t × 2π)` — smooth sinusoidal heading.
+   - **Speed:** `speed × clip(1.0 - turn_rate × 0.3, 0.4, 1.0)` — slows during turns.
+   - **Position:** Integrated from velocity: `dx = v × sin(yaw)`, `dy = v × cos(yaw)`.
+   - Returns `(N, 3)` array: `[x, y, yaw]` in world frame.
 
-**Note:** The pyslam ORB-SLAM3 wrapper (`src/slam/orb_slam3_wrapper.py`) exists for production use but requires the full ORB-SLAM3 library to be compiled and installed. The notebook's fallback ensures the pipeline runs in all environments.
+2. **Per-scene parameters (`SCENE_TRAJECTORIES`):** Each terrain has tuned trajectory parameters:
 
-**Code:** `src/slam/orb_slam3_wrapper.py`, Notebook Cell 6
+   | Scene | Speed | Turn Freq | Amplitude | Start Angle |
+   |-------|-------|-----------|-----------|-------------|
+   | Creek | 0.5 | 0.015 | 10.0 | 0.0 |
+   | Village | 0.6 | 0.025 | 6.0 | 0.3 |
+   | Trail | 0.4 | 0.03 | 12.0 | -0.2 |
+
+3. Poses are saved as `(N, 3)` text file (x, y, yaw).
+
+**Code:** `src/sim/trajectory.py`, Notebook Cell 3
 
 ---
 
 ### Stage 4: Mapping (Costmap Construction)
 
-**What:** Projects segmented pixels from each camera frame into world coordinates to build a 2D occupancy grid (costmap).
+**What:** Projects segmented pixels from each camera frame into world coordinates to build a 2D gradient occupancy costmap.
 
-**Why:** The robot needs a bird's-eye-view map of its environment to plan collision-free paths. Each pixel classified as "traversable" or "obstacle" is back-projected onto the ground plane.
+**Why:** The robot needs a bird's-eye-view map with continuous cost values to plan paths that prefer low-cost terrain and maintain safety margins around obstacles.
 
 **How it works:**
 
 1. **Grid setup:** Creates a 1600×1600 cell grid (80m × 80m at 0.05m/cell resolution), initialized to `127` (unknown).
 
-2. **For each frame:**
+2. **Per-pixel depth estimation (`_pixel_depths()`):** Instead of a constant depth, each pixel row gets its own depth based on its vertical position:
+   ```python
+   half_vfov = arctan2(H/2, fy)
+   beta = half_vfov * (H - 1 - v) / (H/2)    # angle below horizon
+   depth = cam_height / tan(beta)               # ground-plane distance
+   depth = clip(depth, 0.3, 80.0)
+   ```
+   Pixels at the bottom of the image (close) get small depth; pixels near the horizon get large depth.
+
+3. **For each frame:**
    - Extracts traversable pixels (class 0) and obstacle pixels (class 1).
-   - **Back-projects** each pixel to world coordinates using the camera intrinsics:
-     - Converts pixel `(u, v)` to normalized camera coordinates using `K`.
-     - Applies pitch rotation to transform from camera frame to world frame.
-     - Depth is approximated: `depth = cam_height / tan(pitch)` if pitch > 0, else 5.0m.
-   - Transforms world coordinates by the robot's pose (adds robot position).
-   - Maps to grid indices and marks cells as free (`0`) or occupied (`255`).
+   - **Back-projects** each pixel to world coordinates using per-pixel depth and camera intrinsics.
+   - Transforms world coordinates by the robot's pose.
+   - Maps to grid indices and marks cells as free (`0`) or occupied (`254`).
 
-3. **Obstacle inflation:** After processing all frames, dilates occupied cells using morphological dilation with an elliptical structuring element (radius = `inflate_radius / resolution` cells). This creates a safety margin around obstacles.
+4. **Exponential gradient inflation:** After processing all frames, computes Euclidean distance to nearest obstacle using `scipy.ndimage.distance_transform_edt`, then applies exponential decay:
+   ```python
+   dist = distance_transform_edt(~obs_mask) * resolution  # metres
+   gradient = 254 * exp(-3.0 * clip(dist, 0, 3.0))
+   ```
+   This produces a smooth cost gradient: `254` (lethal) → `200` (danger) → `50` (near) → `0` (free).
 
-**The `_pixel_to_world` function:**
-```python
-def _pixel_to_world(u, v, depth, K, cam_height, pitch):
-    x_cam = (u - K[0,2]) * depth / K[0,0]   # horizontal offset
-    y_cam = (v - K[1,2]) * depth / K[1,1]   # vertical offset
-    z_cam = depth
-    cp, sp = np.cos(pitch), np.sin(pitch)
-    x_w = x_cam
-    y_w = cp * y_cam - sp * z_cam             # pitch rotation
-    return x_w, y_w
-```
-
-**Code:** `src/mapping/costmap_builder.py`, Notebook Cell 7
+**Code:** `src/mapping/costmap_builder.py`, Notebook Cell 3
 
 ---
 
 ### Stage 5: Global Planning (A*)
 
-**What:** Finds a collision-free path from the robot's current position to a goal position using A* pathfinding on the costmap.
+**What:** Finds a cost-aware collision-free path from the robot's current position to a goal position using A* pathfinding on the gradient costmap.
 
-**Why:** Given the occupancy grid, the robot needs a global route that avoids all obstacles.
+**Why:** Given the occupancy grid with continuous costs, the robot needs a global route that avoids obstacles and prefers low-cost terrain.
 
 **How it works:**
 
-1. **Start position:** First valid pose from SLAM (world XY).
-2. **Goal position:** 12 meters ahead along the X-axis from start.
+1. **Start position:** First valid pose from trajectory (world XY).
+2. **Goal position:** 15 meters ahead along the direction from start to final pose.
 3. **A* algorithm:**
    - Uses 8-connected grid (cardinal + diagonal moves).
    - Heuristic: Euclidean distance (`np.hypot`).
-   - Move costs: 1.0 for cardinal, 1.414 (√2) for diagonal.
-   - Skips cells where `costmap == 255` (occupied).
-   - Unknown cells (`127`) are treated as passable.
+   - Base move costs: 1.0 for cardinal, 1.414 (√2) for diagonal.
+   - **Cost-aware edge weights:** `edge_weight = base_cost × (1.0 + cell_cost / 254.0)` — paths through high-cost terrain (near obstacles) are penalized.
+   - Skips cells where `costmap >= 250` (lethal obstacle).
+   - Unknown cells (`127`) and low-cost gradient cells are passable.
 4. **Fallbacks:**
-   - If start or goal is on an occupied cell → returns straight line `[start, goal]`.
+   - If start or goal is on a lethal cell → returns straight line `[start, goal]`.
    - If no path exists → returns straight line `[start, goal]`.
 5. Returns list of world-frame `(x, y)` waypoints.
 
-**Code:** `src/planning/astar_planner.py`, Notebook Cell 8
+**Code:** `src/planning/astar_planner.py`, Notebook Cell 3
 
 ---
 
@@ -270,51 +276,59 @@ def _pixel_to_world(u, v, depth, K, cam_height, pitch):
 **How it works:**
 
 1. **Target selection:** Finds the first waypoint at distance ≥ `lookahead` (1.5m) ahead of the robot. If none found, uses the last waypoint.
-2. **Frame transformation:** Transforms the target from world frame to vehicle-local frame using the current yaw:
-   ```
-   local_x = cos(yaw) * dx + sin(yaw) * dy
-   local_y = -sin(yaw) * dx + cos(yaw) * dy
-   ```
+2. **Frame transformation:** Transforms the target from world frame to vehicle-local frame using the current yaw.
 3. **Behind-target handling:** If `local_x ≤ 0` (target behind robot), sets `v = 0` and rotates in place.
 4. **Curvature calculation:**
    ```
    L = hypot(local_x, local_y)
-   curvature = 2 * local_y / (L * L)
+   curvature = 2 × local_y / (L²)
    v = max_v (1.5 m/s)
-   w = clip(v * curvature, -max_w, max_w)   # max_w = 1.0 rad/s
+   w = clip(v × curvature, -max_w, max_w)   # max_w = 1.0 rad/s
    ```
 
-**Code:** `src/planning/pure_pursuit.py`, Notebook Cell 8
+**Code:** `src/planning/pure_pursuit.py`, Notebook Cell 3
 
 ---
 
 ### Stage 7: Visualization (Demo Video)
 
-**What:** Renders a composite visualization for each frame and writes it to `demo.mp4`.
+**What:** Renders a professional 12-layer composite visualization for each frame, writing per-scene `demo.mp4` videos and a side-by-side montage.
 
-**Why:** Provides a visual record of the pipeline's output, combining the original view with all computed data overlays.
+**Why:** Provides a visual record of the pipeline's output with all computed data overlays, suitable for hackathon presentation.
 
 **How it works:**
 
 For each frame, `draw_frame()` composites:
 
-1. **Segmentation overlay** — Colorized mask alpha-blended onto the original frame (green=traversable, red=obstacle, blue=sky) at 35% opacity.
-2. **Costmap mini-map** — 120×120 pixel JET-colormap version of the costmap placed in the top-left corner, with:
-   - Green dot for current robot position.
-   - Cyan dot for current pose.
-3. **HUD text** — Bottom-left velocity readout: `v=XX.XX m/s  w=XX.XX rad/s`.
+| # | Layer | Position | Content | Style |
+|---|-------|----------|---------|-------|
+| 1 | Segmentation overlay | Full frame | Colorized mask with edge contours | Muted palette (green/red/blue), 35% alpha, obstacle contours |
+| 2 | Trajectory trail | Main view | Last 20 vehicle positions | Cyan dots + thin polyline |
+| 3 | Grid overlay | Main view | Faint reference grid | White, 1px every 80px |
+| 4 | Mini-map | Top-left, 200×200 | Gradient costmap + grid + A* path + vehicle dot with heading arrow | Custom terrain colormap, semi-transparent |
+| 5 | Frame info bar | Top, full width | `Frame 15/30 | 12.3ms/frame` | Dark bar, white text |
+| 6 | Status badge | Top-right | `PATH CLEAR` / `OBSTACLES` / `BLOCKED` | Color-coded pill badge |
+| 7 | Velocity HUD | Bottom-left | `v=0.50 m/s  w=0.12 rad/s` | White text with shadow |
+| 8 | Legend | Bottom-center | 3 colored squares + labels | Small, unobtrusive |
+| 9 | Speed gauge | Bottom-right | Semi-circular arc showing speed | White arc with green/yellow/red fill |
+| 10 | Heading compass | Below status badge | Arrow showing yaw direction | White circle with yellow arrow |
+| 11 | Border | Full frame | 3px colored border | Green = clear, Yellow = obstacles nearby, Red = blocked |
 
-**Output:** `demo.mp4` at 640×360, 10 FPS.
+**Title card:** Each video begins with a 2-second title card showing the terrain name and tech stack, with a fade-in animation.
 
-**Code:** `src/mapping/viz.py` (draw_frame), `src/perception/utils.py` (overlay_mask, colorize_mask), Notebook Cell 9
+**Montage video:** All per-scene videos are stitched side-by-side using ffmpeg `xstack` filter, producing a single comparison video.
+
+**Video encoding:** Raw BGR frames are piped directly to ffmpeg via stdin (`-f rawvideo -pix_fmt bgr24`), encoded to H.264 (`-c:v libx264 -pix_fmt yuv420p -movflags +faststart`). No intermediate files or OpenCV VideoWriter.
+
+**Code:** `src/mapping/viz.py` (`draw_frame()`), `src/perception/utils.py` (`overlay_mask_with_edges()`), Notebook Cells 3, 5
 
 ---
 
 ### Stage 8: Interactive UI (Streamlit)
 
-**What:** Launches a web-based interactive dashboard for exploring the pipeline results.
+**What:** Launches a web-based interactive dashboard for exploring the pipeline results across all three terrains.
 
-**Why:** Allows real-time inspection of individual frames, costmaps, trajectories, and segmentation masks.
+**Why:** Allows real-time inspection of individual frames, costmaps, trajectories, and segmentation masks with animated playback.
 
 **How it works:**
 
@@ -322,13 +336,33 @@ For each frame, `draw_frame()` composites:
 - **Local mode:** Prints launch instructions, optionally starts Streamlit interactively.
 
 **UI features:**
-- **Video player** — Watch `demo.mp4` directly in the browser.
-- **Costmap explorer** — Two-column layout:
-  - Left: Costmap with trajectory (green), current pose (cyan), and A* waypoints (magenta).
-  - Right: Current frame number, pose coordinates, waypoint count, and colorized segmentation mask.
-- **Sidebar controls** — Toggle video/costmap display, scrub through frames with a slider.
 
-**Code:** `src/ui/streamlit_app.py`, Notebook Cell 10
+- **Scene selector** — Dropdown in sidebar to switch between Creek, Village, and Trail.
+- **Animated playback** — Play/Pause button with adjustable speed (1-15 FPS) using `@st.fragment(run_every=...)`.
+- **Synchronized views** — Three-column layout:
+  - Left: Gradient costmap with trajectory, A* path, and vehicle dot.
+  - Center: Camera frame with segmentation overlay + edge contours.
+  - Right: Colorized segmentation mask.
+- **Performance metrics** — Frame number, pose coordinates, velocity, obstacle percentage.
+- **Dark theme** — Professional dark background with cyan accents.
+- **Video player** — Watch per-scene `demo.mp4` directly in the browser.
+- **Manual controls** — Frame slider, Prev/Next buttons.
+
+**Code:** `src/ui/streamlit_app.py`, Notebook Cell 6
+
+---
+
+## Multi-Terrain Scenarios
+
+The pipeline runs on three distinct RUGD terrain sequences:
+
+| Scene | Directory | Frames | Terrain Type | Trajectory Style |
+|-------|-----------|--------|-------------|-----------------|
+| **Creek** | `scene_03` | 836 | Rock bed, water, boulders | Wide turns (amplitude=10m) |
+| **Village** | `village` | ~117 | Buildings, paved roads, fences | Tight turns (amplitude=6m) |
+| **Trail** | `trail_7` | ~290 | Forest path, gravel, trees | Frequent turns (amplitude=12m) |
+
+Each scene produces its own set of artifacts (`masks.npy`, `poses.txt`, `costmap.npy`, `waypoints.npy`, `cmd_vel.npy`, `demo.mp4`) and is independently viewable in the Streamlit UI.
 
 ---
 
@@ -338,52 +372,55 @@ For each frame, `draw_frame()` composites:
 vision-ugv-nav-rocky/
 ├── data/                           # RUGD data (git-ignored)
 │   ├── README.md                   # Dataset attribution
-│   └── rugd/scene_03/
-│       ├── rgb/                    # Extracted creek frames
-│       │   ├── frame_0000.png
-│       │   ├── frame_0001.png
-│       │   └── ...
-│       ├── meta.json               # Camera intrinsics
-│       ├── masks.npy               # Segmentation masks (N,H,W)
-│       ├── poses.txt               # Robot poses (N,3)
-│       ├── costmap.npy             # Occupancy grid (G,G)
-│       ├── origin.npy              # Grid origin (2,)
-│       ├── waypoints.npy           # A* path (M,2)
-│       └── cmd_vel.npy             # Velocity commands (N,2)
+│   └── rugd/
+│       ├── scene_03/               # Creek sequence
+│       │   ├── rgb/                # Extracted creek frames
+│       │   │   ├── frame_0000.png
+│       │   │   └── ...
+│       │   ├── meta.json           # Camera intrinsics
+│       │   ├── masks.npy           # Segmentation masks (N,H,W)
+│       │   ├── poses.txt           # Robot poses (N,3)
+│       │   ├── costmap.npy         # Gradient costmap (G,G)
+│       │   ├── origin.npy          # Grid origin (2,)
+│       │   ├── waypoints.npy       # A* path (M,2)
+│       │   ├── cmd_vel.npy         # Velocity commands (N,2)
+│       │   └── demo.mp4            # Per-scene demo video
+│       ├── village/                # Village sequence (same structure)
+│       └── trail_7/                # Trail sequence (same structure)
 │
 ├── notebooks/
-│   └── 01_full_pipeline.ipynb      # Main pipeline notebook
+│   └── 01_full_pipeline.ipynb      # Main pipeline notebook (7 cells)
 │
 ├── src/
 │   ├── __init__.py
 │   ├── perception/
 │   │   ├── __init__.py
-│   │   ├── fastscnn_onnx.py        # ONNX segmentation wrapper
-│   │   └── utils.py                # Mask visualization utilities
-│   ├── slam/
+│   │   ├── fastscnn_onnx.py        # DeepLabV3 PyTorch segmentation
+│   │   └── utils.py                # Mask visualization + edge contours
+│   ├── sim/
 │   │   ├── __init__.py
-│   │   └── orb_slam3_wrapper.py    # ORB-SLAM3 monocular wrapper
+│   │   └── trajectory.py           # Curved trajectory generator
 │   ├── mapping/
 │   │   ├── __init__.py
-│   │   ├── costmap_builder.py      # 2D occupancy grid builder
-│   │   └── viz.py                  # Frame visualization compositor
+│   │   ├── costmap_builder.py      # Gradient costmap builder
+│   │   └── viz.py                  # 12-layer frame compositor
 │   ├── planning/
 │   │   ├── __init__.py
-│   │   ├── astar_planner.py        # A* pathfinding
+│   │   ├── astar_planner.py        # Cost-aware A* pathfinding
 │   │   └── pure_pursuit.py         # Pure pursuit controller
+│   ├── slam/
+│   │   ├── __init__.py
+│   │   └── orb_slam3_wrapper.py    # ORB-SLAM3 wrapper (optional)
 │   ├── ui/
 │   │   ├── __init__.py
 │   │   └── streamlit_app.py        # Interactive web dashboard
 │   └── pyslam/                     # pyslam submodule (optional)
 │
-├── models/
-│   └── fastscnn_rugd.onnx          # Exported segmentation model
-│
 ├── scripts/
 │   └── download_rugd.sh            # Standalone download script
 │
+├── demo_montage.mp4                # Side-by-side all terrains
 ├── requirements.txt                # Python dependencies
-├── Dockerfile                      # GPU Docker image
 ├── .gitignore
 ├── LICENSE                         # MIT
 └── README.md                       # This file
@@ -395,21 +432,19 @@ vision-ugv-nav-rocky/
 
 ### `src/perception/fastscnn_onnx.py`
 
-ONNX Runtime wrapper for Fast-SCNN semantic segmentation.
+PyTorch DeepLabV3-ResNet50 segmentation wrapper for CUDA GPU inference.
 
 | Symbol | Type | Description |
 |--------|------|-------------|
-| `FastSCNN` | Class | ONNX inference wrapper |
-| `FastSCNN.__init__(onnx_path, input_size=(640,360))` | Method | Loads ONNX model, selects GPU/CPU provider |
-| `FastSCNN.infer(bgr_frame) → np.ndarray` | Method | Runs inference, returns `(H,W)` uint8 mask |
+| `DeepLabV3Seg` | Class | PyTorch GPU inference wrapper |
+| `DeepLabV3Seg.__init__(input_size=(640,360))` | Method | Loads model with pretrained weights, moves to CUDA |
+| `DeepLabV3Seg.infer(bgr_frame) → np.ndarray` | Method | Runs inference, returns `(H,W)` uint8 mask (0=traversable, 1=obstacle, 2=sky) |
 
-**GPU fallback logic:**
+**Class remapping:**
 ```python
-available = ort.get_available_providers()
-if "CUDAExecutionProvider" in available:
-    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-else:
-    providers = ["CPUExecutionProvider"]  # CPU fallback with warning
+_TRAVERSABLE = {0, 7, 10, 11, 12, 13, 14}  # VOC classes → nav class 0
+_SKY = {17}                                   # VOC class 17 → nav class 2
+# Everything else → nav class 1 (obstacle)
 ```
 
 ### `src/perception/utils.py`
@@ -418,52 +453,64 @@ Visualization utilities for segmentation masks.
 
 | Symbol | Type | Description |
 |--------|------|-------------|
-| `CLASS_COLORS` | Dict | `{0: (0,255,0), 1: (0,0,255), 2: (255,0,0)}` BGR |
+| `CLASS_COLORS` | Dict | `{0: (70,130,70), 1: (40,40,210), 2: (170,130,50)}` BGR |
 | `colorize_mask(mask) → np.ndarray` | Function | Converts `(H,W)` class mask to `(H,W,3)` BGR image |
-| `overlay_mask(frame, mask, alpha=0.4) → np.ndarray` | Function | Alpha-blends colorized mask onto frame |
+| `overlay_mask(frame, mask, alpha=0.35) → np.ndarray` | Function | Alpha-blends colorized mask onto frame |
+| `overlay_mask_with_edges(frame, mask, alpha=0.35) → np.ndarray` | Function | Alpha-blends mask + draws obstacle edge contours |
 
-### `src/mapping/costmap_builder.py`
+### `src/sim/trajectory.py`
 
-Builds 2D occupancy grid from segmentation masks and robot poses.
+Generates realistic curved trajectories for demo purposes.
 
 | Symbol | Type | Description |
 |--------|------|-------------|
-| `_pixel_to_world(u, v, depth, K, cam_height, pitch)` | Function | Back-projects pixel to world XY via ground-plane assumption |
-| `build_costmap(masks, poses, K, cam_height, pitch, resolution, grid_size_m, inflate_radius)` | Function | Main costmap builder. Returns `(costmap, origin)` |
+| `simulate_trajectory(n_frames, speed, turn_freq, amplitude, start_angle) → np.ndarray` | Function | Returns `(N,3)` poses `[x, y, yaw]` with sinusoidal weaving |
+| `SCENE_TRAJECTORIES` | Dict | Per-scene trajectory parameters |
+
+### `src/mapping/costmap_builder.py`
+
+Builds gradient 2D occupancy grid from segmentation masks and robot poses.
+
+| Symbol | Type | Description |
+|--------|------|-------------|
+| `_pixel_depths(v_coords, W, H, K, cam_height) → np.ndarray` | Function | Per-pixel ground-plane depth using FOV-based model |
+| `_pixel_to_world(u, v, depth, K) → tuple` | Function | Back-projects pixel to camera-frame XY |
+| `build_costmap(masks, poses, K, cam_height, pitch, resolution, grid_size_m, inflate_radius) → tuple` | Function | Returns `(costmap, origin)` |
 
 **Parameters:**
 - `masks`: `(N, H, W)` uint8 — segmentation masks
-- `poses`: `(N, 3)` float — robot world positions
+- `poses`: `(N, 3)` float — robot world positions `[x, y, yaw]`
 - `K`: `(3, 3)` float — camera intrinsic matrix
 - `resolution`: meters per grid cell (default 0.05)
 - `grid_size_m`: physical grid size in meters (default 80.0)
 - `inflate_radius`: obstacle inflation radius in meters (default 0.3)
 
 **Returns:**
-- `costmap`: `(grid_n, grid_n)` uint8 — `0`=free, `127`=unknown, `255`=occupied
+- `costmap`: `(grid_n, grid_n)` uint8 — gradient values `0`=free, `127`=unknown, `1-254`=cost gradient, `254`=lethal
 - `origin`: `(2,)` float — world XY of `costmap[0,0]`
 
 ### `src/mapping/viz.py`
 
-Composites visualization overlays onto camera frames.
+12-layer frame visualization compositor.
 
 | Symbol | Type | Description |
 |--------|------|-------------|
-| `draw_frame(frame, mask, pose, waypoints, costmap, origin, cmd, resolution)` | Function | Creates annotated frame with segmentation overlay, costmap mini-map, pose indicator, and HUD text |
+| `draw_frame(frame, mask, pose, waypoints, costmap, origin, cmd, resolution, frame_idx, total_frames, inference_ms, past_poses, heading) → np.ndarray` | Function | Creates annotated frame with all visual overlays |
 
 ### `src/planning/astar_planner.py`
 
-A* pathfinding on 2D occupancy grid.
+Cost-aware A* pathfinding on 2D occupancy grid.
 
 | Symbol | Type | Description |
 |--------|------|-------------|
-| `_heuristic(a, b)` | Function | Euclidean distance between two grid points |
-| `astar(costmap, origin, start_xy, goal_xy, resolution)` | Function | Returns list of world `(x,y)` waypoints |
+| `_heuristic(a, b) → float` | Function | Euclidean distance between two grid points |
+| `astar(costmap, origin, start_xy, goal_xy, resolution) → list` | Function | Returns list of world `(x,y)` waypoints |
 
 **Behavior:**
 - 8-connected grid with diagonal costs = √2
-- Occupied cells (`255`) are impassable
-- Unknown cells (`127`) are passable
+- Lethal cells (`>= 250`) are impassable
+- Cost-aware edge weights: `edge = base_cost × (1.0 + cell_cost / 254.0)`
+- Unknown cells (`127`) and low-cost gradient cells are passable
 - Falls back to straight line if start/goal blocked or no path found
 
 ### `src/planning/pure_pursuit.py`
@@ -472,7 +519,7 @@ Pure Pursuit local path-tracking controller.
 
 | Symbol | Type | Description |
 |--------|------|-------------|
-| `pure_pursuit_step(pose, waypoints, lookahead, max_v, max_w)` | Function | Returns `(v, w)` velocity commands |
+| `pure_pursuit_step(pose, waypoints, lookahead, max_v, max_w) → tuple` | Function | Returns `(v, w)` velocity commands |
 
 **Parameters:**
 - `pose`: `(x, y, yaw)` — current robot pose (yaw in radians)
@@ -481,9 +528,29 @@ Pure Pursuit local path-tracking controller.
 - `max_v`: max linear velocity in m/s (default 1.5)
 - `max_w`: max angular velocity in rad/s (default 1.0)
 
+### `src/ui/streamlit_app.py`
+
+Interactive web dashboard with animated playback and multi-scene support.
+
+| Symbol | Type | Description |
+|--------|------|-------------|
+| `SCENES` | Dict | Scene label → directory mapping |
+| `load_artifacts(_scene_dir)` | Cached Function | Loads masks, poses, costmap, origin, waypoints, cmd_vel per scene |
+| `synchronized_views()` | Fragment | Animated view with `@st.fragment(run_every=...)` |
+| `_build_vis_frame(idx)` | Function | Builds annotated frame using `draw_frame()` |
+| `render_costmap_frame(idx)` | Function | Renders gradient costmap with trajectory and A* path |
+
+**UI sections:**
+- Scene selector dropdown (Creek / Village / Trail)
+- Play/Pause with speed control (1-15 FPS)
+- Synchronized costmap + camera + segmentation columns
+- Frame info, pose, velocity, obstacle metrics
+- Per-scene video player
+- Dark theme
+
 ### `src/slam/orb_slam3_wrapper.py`
 
-Thin wrapper around pyslam's ORB-SLAM3 for monocular visual SLAM.
+Thin wrapper around pyslam's ORB-SLAM3 for monocular visual SLAM (optional, not used in default pipeline).
 
 | Symbol | Type | Description |
 |--------|------|-------------|
@@ -492,44 +559,31 @@ Thin wrapper around pyslam's ORB-SLAM3 for monocular visual SLAM.
 | `OrbSlam3Mono.track(gray_frame, timestamp) → np.ndarray or None` | Method | Processes frame, returns 4×4 pose matrix |
 | `OrbSlam3Mono.shutdown()` | Method | Cleans up SLAM system |
 
-### `src/ui/streamlit_app.py`
-
-Interactive web dashboard for exploring pipeline results.
-
-| Symbol | Type | Description |
-|--------|------|-------------|
-| `load_artifacts()` | Cached Function | Loads masks, poses, costmap, origin, waypoints from disk |
-
-**UI sections:**
-- Video player (`st.video`)
-- Costmap explorer with trajectory overlay
-- Segmentation mask viewer
-- Frame selector sidebar
-
 ---
 
 ## Data Artifacts
 
-All artifacts are saved to `data/rugd/scene_03/`:
+All artifacts are saved per-scene to `data/rugd/{scene_dir}/`:
 
 | File | Format | Shape / Size | Contents |
 |------|--------|-------------|----------|
 | `rgb/frame_XXXX.png` | PNG | 1376×1110×3 | Raw camera frames from RUGD |
 | `meta.json` | JSON | — | Camera intrinsics and config |
 | `masks.npy` | NumPy | `(N, 360, 640)` uint8 | Per-frame segmentation masks |
-| `poses.txt` | Text | `(N, 3)` float | Robot world positions (x, y, z) |
-| `costmap.npy` | NumPy | `(1600, 1600)` uint8 | 2D occupancy grid |
+| `poses.txt` | Text | `(N, 3)` float | Robot poses `[x, y, yaw]` (curved trajectory) |
+| `costmap.npy` | NumPy | `(1600, 1600)` uint8 | Gradient occupancy grid (0-254) |
 | `origin.npy` | NumPy | `(2,)` float | World XY of grid[0,0] |
 | `waypoints.npy` | NumPy | `(M, 2)` float | A* path waypoints |
-| `cmd_vel.npy` | NumPy | `(N, 2)` float | Velocity commands (v, w) |
-| `models/fastscnn_rugd.onnx` | ONNX | ~100MB | Exported segmentation model |
-| `demo.mp4` | MP4 | 640×360 @ 10fps | Rendered visualization video |
+| `cmd_vel.npy` | NumPy | `(N, 2)` float | Velocity commands `[v, w]` |
+| `demo.mp4` | MP4 H.264 | 640×360 @ 10fps | Per-scene demo video with title card |
+
+Additionally, `demo_montage.mp4` (in repo root) contains all three scenes stitched side-by-side.
 
 ---
 
 ## Camera Intrinsics
 
-The RUGD dataset uses a Prosilica GT2750C camera with an 8mm lens mounted on a Clearpath Husky robot at ~25cm ground height. The calibration values used:
+The RUGD dataset uses a Prosilica GT2750C camera with an 8mm lens mounted on a Clearpath Husky robot. The calibration values used (identical for all scenes):
 
 ```
 Intrinsic Matrix K:
@@ -549,55 +603,42 @@ Image resolution: 1376×1110 (native), used at 640×480
 
 ## GPU Support
 
-The pipeline uses GPU acceleration at three stages:
+The pipeline uses GPU acceleration at two stages:
 
-| Stage | Library | GPU Usage | Fallback |
-|-------|---------|-----------|----------|
-| **ONNX Export** | PyTorch | `model.to('cuda')` for faster export | Falls back to CPU |
-| **Segmentation** | ONNX Runtime | `CUDAExecutionProvider` | Falls back to `CPUExecutionProvider` |
-| **SLAM** | pyslam | ORB feature extraction on CPU | Always CPU ( pyslam is CPU-only) |
+| Stage | Library | GPU Usage |
+|-------|---------|-----------|
+| **Segmentation** | PyTorch | `model.cuda()` — DeepLabV3 inference on CUDA |
+| **Costmap** | SciPy | `distance_transform_edt` on CPU (fast for 1600×1600) |
 
 **Detection logic:**
 ```python
 import torch
-HAS_GPU = torch.cuda.is_available()
-if HAS_GPU:
-    GPU_NAME = torch.cuda.get_device_name(0)
-    _props = torch.cuda.get_device_properties(0)
-    GPU_MEM = getattr(_props, 'total_memory', getattr(_props, 'total_mem', 0)) / 1e9
+if not torch.cuda.is_available():
+    raise RuntimeError('GPU REQUIRED but not detected.')
+GPU_NAME = torch.cuda.get_device_name(0)
 ```
 
-**ONNX Runtime provider selection:**
-```python
-available = ort.get_available_providers()
-if "CUDAExecutionProvider" in available:
-    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-else:
-    providers = ["CPUExecutionProvider"]
-```
-
-When no GPU is available, the pipeline runs correctly but segmentation is ~10-50× slower.
+GPU is **required** — the pipeline raises an error if no GPU is detected. This ensures consistent performance for the demo.
 
 ---
 
 ## Configuration Parameters
 
-### Pipeline Parameters (Notebook Cells)
+### Pipeline Parameters
 
 | Parameter | Default | Location | Description |
 |-----------|---------|----------|-------------|
-| `DATA_ROOT` | `data/rugd/scene_03` | Cell 2 | Root directory for all data |
-| `MODEL_PATH` | `models/fastscnn_rugd.onnx` | Cell 4 | ONNX model path |
-| `input_size` | `(640, 360)` | Cell 5 | Model input resolution (W×H) |
-| `resolution` | `0.05` m/cell | Cell 7 | Costmap grid resolution |
-| `grid_size_m` | `80.0` m | Cell 7 | Physical size of costmap |
-| `inflate_radius` | `0.3` m | Cell 7 | Obstacle safety margin |
-| `lookahead` | `1.5` m | Cell 8 | Pure pursuit lookahead distance |
-| `max_v` | `1.5` m/s | Cell 8 | Maximum linear velocity |
-| `max_w` | `1.0` rad/s | Cell 8 | Maximum angular velocity |
-| `goal_distance` | `12.0` m | Cell 8 | How far ahead to plan (X-axis) |
-| `video_fps` | `10.0` | Cell 9 | Output video frame rate |
-| `TARGET_W × TARGET_H` | `640 × 360` | Cell 9 | Output video resolution |
+| `speed` | `0.5` m/frame | Cell 3 | Base trajectory speed |
+| `turn_freq` | `0.015-0.03` | Cell 3 | Sinusoidal turn frequency |
+| `amplitude` | `6-12` m | Cell 3 | Lateral weaving amplitude |
+| `resolution` | `0.05` m/cell | Cell 3 | Costmap grid resolution |
+| `grid_size_m` | `80.0` m | Cell 3 | Physical size of costmap |
+| `inflate_radius` | `0.3` m | Cell 3 | Obstacle safety margin |
+| `lookahead` | `1.5` m | Cell 3 | Pure pursuit lookahead distance |
+| `max_v` | `1.5` m/s | Cell 3 | Maximum linear velocity |
+| `max_w` | `1.0` rad/s | Cell 3 | Maximum angular velocity |
+| `video_fps` | `10.0` | Cell 3 | Output video frame rate |
+| `TARGET_W × TARGET_H` | `640 × 360` | Cell 3 | Output video resolution |
 
 ### Camera Parameters (meta.json)
 
@@ -619,13 +660,12 @@ When no GPU is available, the pipeline runs correctly but segmentation is ~10-50
 ### Python Packages (`requirements.txt`)
 
 ```
---index-url https://download.pytorch.org/whl/cu118
-torch                           # PyTorch (ONNX export, model loading)
+torch                           # PyTorch (DeepLabV3 inference, GPU)
 torchvision                     # Vision models (DeepLabV3-ResNet50)
 torchaudio                      # Audio processing (PyTorch dependency)
-onnxruntime-gpu                 # GPU-accelerated ONNX inference
 opencv-python-headless          # Image I/O and processing
 numpy                           # Array operations
+scipy                           # Distance transform for costmap inflation
 matplotlib                      # Plotting (optional)
 tqdm                            # Progress bars
 streamlit                       # Web UI framework
@@ -633,36 +673,14 @@ pyngrok                         # ngrok tunnel for Colab
 gdown                           # Google Drive downloader
 ```
 
-### System Packages (Colab/Docker)
+### System Packages (Colab)
 
 ```
-cmake, build-essential          # C++ compilation (pyslam)
+cmake, build-essential          # C++ compilation (optional pyslam)
 libopencv-dev                   # OpenCV headers
 wget, unzip                     # Dataset download/extraction
-python3.10, python3-pip         # Python runtime
-libglib2.0-0, libsm6, libxext6  # OpenCV GUI dependencies
-libxrender-dev, libgl1-mesa-glx
+ffmpeg                          # Video encoding (H.264 via libx264)
 ```
-
----
-
-## Docker
-
-### Build
-
-```bash
-docker build -t ugv-nav .
-```
-
-Uses `nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04` as base image with CUDA 11.8 + cuDNN 8.
-
-### Run
-
-```bash
-docker run --gpus all -p 8888:8888 -v $(pwd)/data:/app/data ugv-nav
-```
-
-Opens Jupyter Notebook on `http://localhost:8888`. The `data/` volume mount persists downloaded RUGD data.
 
 ---
 
@@ -683,13 +701,13 @@ CC-BY-4.0. If you use this data, please cite:
 }
 ```
 
-### Fast-SCNN
+### DeepLabV3
 ```bibtex
-@inproceedings{fastscnn,
-  title     = {Fast Semantic Segmentation for Autonomous Driving},
-  author    = {Poudel, Rudra and Li, Siwen and Bonnetat, Stephan},
-  booktitle = {NeurIPS Workshop},
-  year      = {2018}
+@inproceedings{chen2017rethinking,
+  title     = {Rethinking Atrous Convolution for Semantic Image Segmentation},
+  author    = {Chen, Liang-Chieh and Papandreou, George and Kokkinos, Iasonas and Murphy, Kevin and Yuille, Alan L},
+  booktitle = {arXiv preprint arXiv:1706.05587},
+  year      = {2017}
 }
 ```
 
