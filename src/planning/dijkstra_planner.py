@@ -6,9 +6,9 @@ def _heuristic(a, b):
     return np.hypot(a[0] - b[0], a[1] - b[1])
 
 
-def astar(costmap, origin, start_xy, goal_xy, resolution=0.05):
+def dijkstra(costmap, origin, start_xy, goal_xy, resolution=0.05):
     """
-    A* on costmap with cost-aware traversal.
+    Dijkstra on costmap with cost-aware traversal.
 
     costmap : 2D uint8 (0 free, 254 occupied, 127 unknown, gradient in between)
     origin  : world xy of grid[0,0]
@@ -37,7 +37,6 @@ def astar(costmap, origin, start_xy, goal_xy, resolution=0.05):
     heapq.heappush(open_set, (0, start))
     came_from = {}
     g_score = {start: 0}
-    f_score = {start: _heuristic(start, goal)}
 
     moves = [(1, 0), (-1, 0), (0, 1), (0, -1),
              (1, 1), (-1, -1), (1, -1), (-1, 1)]
@@ -67,8 +66,7 @@ def astar(costmap, origin, start_xy, goal_xy, resolution=0.05):
             if tentative < g_score.get(nxt, 1e9):
                 came_from[nxt] = cur
                 g_score[nxt] = tentative
-                f = tentative + _heuristic(nxt, goal)
-                f_score[nxt] = f
+                f = tentative  # Dijkstra: no heuristic
                 heapq.heappush(open_set, (f, nxt))
 
     return [start_xy, goal_xy]
