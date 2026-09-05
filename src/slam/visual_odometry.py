@@ -29,70 +29,62 @@ class SimpleVisualOdometry:
         """Process a single BGR frame and return (x, y, yaw).
 
         Returns the current pose. If tracking fails (not enough features),
-        returns the last known pose without moving.
+        returns the last known pose without moving. Always appends a pose
+        so that len(poses) == len(frames) + 1 (initial + one per frame).
         """
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
 
         if self.prev_gray is None:
             self.prev_gray = gray
+            self.poses.append(self.prev_pose.copy())
             return self.prev_pose.copy()
 
         # Detect ORB features
         kp1, des1 = self.orb.detectAndCompute(self.prev_gray, None)
         kp2, des2 = self.orb.detectAndCompute(gray, None)
 
-        if des1 is None or des2 is None or len(kp1) < 20 or len(kp2) < 20:
-            self.prev_gray = gray
-            return self.prev_pose.copy()
+        new_pose = self.prev_pose.copy()
 
-        # Match features
-        matches = self.bf.knnMatch(des1, des2, k=2)
+        if des1 is not None and des2 is not None and len(kp1) >= 20 and len(kp2) >= 20:
+            # Match features
+            matches = self.bf.knnMatch(des1, des2, k=2)
 
-        # Lowe's ratio test
-        good = [m for m, n in matches if m.distance < 0.7 * n.distance]
+            # Lowe's ratio test
+            good = [m for m, n in matches if m.distance < 0.7 * n.distance]
 
-        if len(good) < 10:
-            self.prev_gray = gray
-            return self.prev_pose.copy()
+            if len(good) >= 10:
+                pts1 = np.float32([kp1[m.queryIdx].pt for m in good])
+                pts2 = np.float32([kp2[m.trainIdx].pt for m in good])
 
-        pts1 = np.float32([kp1[m.queryIdx].pt for m in good])
-        pts2 = np.float32([kp2[m.trainIdx].pt for m in good])
+                # Essential matrix + recover pose
+                E, mask = cv2.findEssentialMat(
+                    pts1, pts2, self.K,
+                    method=cv2.RANSAC, prob=0.999, threshold=1.0
+                )
 
-        # Essential matrix + recover pose
-        E, mask = cv2.findEssentialMat(
-            pts1, pts2, self.K,
-            method=cv2.RANSAC, prob=0.999, threshold=1.0
-        )
+                if E is not None and mask is not None:
+                    inliers = mask.ravel().sum()
+                    if inliers >= 8:
+                        _, R, t, mask_pose = cv2.recoverPose(E, pts1, pts2, self.K, mask=mask)
 
-        if E is None or mask is None:
-            self.prev_gray = gray
-            return self.prev_pose.copy()
+                        # Extract yaw from rotation matrix (z-axis rotation for ground plane)
+                        yaw_delta = np.arctan2(R[1, 0], R[0, 0])
 
-        inliers = mask.ravel().sum()
-        if inliers < 8:
-            self.prev_gray = gray
-            return self.prev_pose.copy()
+                        # Scale translation to metric
+                        dx = self.scale * t[0, 0]
+                        dy = self.scale * t[2, 0]  # camera Z = forward direction
 
-        _, R, t, mask_pose = cv2.recoverPose(E, pts1, pts2, self.K, mask=mask)
+                        # Rotate delta by current yaw to get world-frame displacement
+                        cos_y = np.cos(self.prev_pose[2])
+                        sin_y = np.sin(self.prev_pose[2])
+                        wx = cos_y * dx - sin_y * dy
+                        wy = sin_y * dx + cos_y * dy
 
-        # Extract yaw from rotation matrix (z-axis rotation for ground plane)
-        yaw_delta = np.arctan2(R[1, 0], R[0, 0])
-
-        # Scale translation to metric
-        dx = self.scale * t[0, 0]
-        dy = self.scale * t[2, 0]  # camera Z = forward direction
-
-        # Rotate delta by current yaw to get world-frame displacement
-        cos_y = np.cos(self.prev_pose[2])
-        sin_y = np.sin(self.prev_pose[2])
-        wx = cos_y * dx - sin_y * dy
-        wy = sin_y * dx + cos_y * dy
-
-        new_pose = np.array([
-            self.prev_pose[0] + wx,
-            self.prev_pose[1] + wy,
-            self.prev_pose[2] + yaw_delta,
-        ])
+                        new_pose = np.array([
+                            self.prev_pose[0] + wx,
+                            self.prev_pose[1] + wy,
+                            self.prev_pose[2] + yaw_delta,
+                        ])
 
         self.prev_gray = gray
         self.prev_pose = new_pose
